@@ -3,17 +3,32 @@ import tensorflow as tf
 
 
 def dense_batch_fc_tanh(x, units, is_training, scope, reg, do_norm=False):
+    """
+    定义了一个具有批量标准化和激活函数的全连接层
+    - `x`: 输入张量
+    - `units`: 输出单元的数量
+    - `is_training`: 一个布尔值，指示是否处于训练阶段
+    - `scope`: 变量作用域的名称
+    - `reg`: 正则化参数
+    - `do_norm`: 一个布尔值，指示是否应用批量标准化，默认为 False
+    """
+    # TensorFlow 上下文管理器，用于创建变量作用域。在这个作用域内创建的变量将具有给定的作用域名称。
     with tf.variable_scope(scope):
+        # 定义了一个用于初始化权重的初始化器。它会产生具有截断正态分布的随机值，标准差为 0.01
         init = tf.truncated_normal_initializer(stddev=0.01)
+        # 权重变量 `h1_w`。它具有形状 `[输入特征数, 输出单元数]`，使用之前定义的初始化器进行初始化，并应用 L2 正则化。
         h1_w = tf.get_variable(scope + '_w',
                                shape=[x.get_shape().as_list()[1], units],
                                initializer=init,
                                regularizer=tf.contrib.layers.l2_regularizer(reg), )
+        # 偏置变量 `h1_b`。它具有形状 `[1, 输出单元数]`，初始化为零，并应用 L2 正则化。
         h1_b = tf.get_variable(scope + '_b',
                                shape=[1, units],
                                initializer=tf.zeros_initializer(),
                                regularizer=tf.contrib.layers.l2_regularizer(reg), )
+        #  这行代码计算全连接层的输出，也就是矩阵相乘再加个bias
         h1 = tf.matmul(x, h1_w) + h1_b
+        # 是否正则化
         if do_norm:
             h2 = tf.layers.batch_normalization(h1, training=is_training, name=scope + '_bn')
             return tf.nn.tanh(h2)
@@ -22,6 +37,9 @@ def dense_batch_fc_tanh(x, units, is_training, scope, reg, do_norm=False):
 
 
 def dense_fc(x, units, scope, reg):
+    """
+    这一段是没有使用批量标准化的全连接层
+    """
     with tf.variable_scope(scope):
         init = tf.truncated_normal_initializer(stddev=0.01)
         h1_w = tf.get_variable(scope + '_w',
@@ -38,12 +56,17 @@ def dense_fc(x, units, scope, reg):
 
 class ALDI(object):
     def __init__(self, sess, args, emb_dim, content_dim):
+        """
+        构造函数
+        - `sess`: TensorFlow会话对象
+        - `args`: 参数对象，包含了一些超参数,{lr, reg, alpha, beta, gamma(distillation loss 的三个超参数), freq_coef_a, freq_coef_M, tws, batch_size}
+        - `emb_dim`: 嵌入维度
+        - `content_dim`: 物品内容的维度
+        """
+        # 初始化参数
         self.sess = sess
         self.emb_dim = emb_dim
         self.content_dim = content_dim
-        self.transformed_layers = [200, 200]
-        self.warm_item_ids = None
-        self.cold_item_ids = None
         self.lr = args.lr
         self.reg = args.reg
         self.alpha = args.alpha
@@ -52,16 +75,30 @@ class ALDI(object):
         self.freq_coef_a = args.freq_coef_a
         self.freq_coef_M = args.freq_coef_M
 
+        self.transformed_layers = [200, 200] # 转换层神经元的数量
+        self.warm_item_ids = None
+        self.cold_item_ids = None
+
+        # 创建5个占位符张量
+        # 用于输入物品的内容特征。它的形状是`[None, content_dim]`，其中`None`表示可以接受任意数量的样本。
         self.item_content = tf.placeholder(tf.float32, [None, content_dim], name='item_content')  # [2 * batch]
+        # 用于输入真实物品的嵌入表示
         self.true_item_emb = tf.placeholder(tf.float32, [None, emb_dim], name='true_item_emb')  # [2 * batch]
+        # 用于输入真实用户的嵌入表示
         self.true_user_emb = tf.placeholder(tf.float32, [None, emb_dim], name='true_user_emb')  # [batch]
+        # 用于指示模型是否处于训练模式。它的类型是布尔型。
         self.training_flag = tf.placeholder(tf.bool, name='training_flag')
+        # 用于输入物品的频率信息,是一个一维向量
         self.item_freq = tf.placeholder(tf.float32, [None], name='item_frequency')
+
+        # item_weight用于物品的加权
         if args.tws:
             self.item_weight = tf.clip_by_value(tf.nn.tanh(self.freq_coef_a * self.item_freq), 0,
                                                 np.tanh(self.freq_coef_M))  # 这里用 tanh(M) 来作为封顶值而不是 1 不一定对，但是更符合实际
         else:
             self.item_weight = 1.0
+
+        # 创建了常数张量
         self.one_labels = tf.constant(np.ones(shape=[args.batch_size], dtype=np.float32))
 
         # build Teacher - pre-trained embedding
